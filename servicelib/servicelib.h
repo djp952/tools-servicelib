@@ -1,5 +1,5 @@
 //-----------------------------------------------------------------------------
-// Copyright (c) 2001-2014 Michael G. Brehm
+// Copyright (c) 2001-2016 Michael G. Brehm
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -1096,8 +1096,13 @@ namespace svctl {
 			// Construct a vector<> for the arguments starting with the service name
 			// and recursively invoke one of the variadic overloads until done
 			std::vector<tstring> argvector { servicename };
-			Start(argvector, arguments...);
+			Start(std::move(argvector), arguments...);
 		}
+
+		// Start
+		//
+		// Starts the service, specifying an argc/argv style set of command line arguments
+		void Start(const resstring& servicename, int argc, tchar_t** argv);
 
 		// Stop
 		//
@@ -1213,36 +1218,36 @@ namespace svctl {
 		// Recursive variadic function, converts for a fundamental type argument
 		template <typename _next, typename... _remaining>
 		typename std::enable_if<std::is_fundamental<_next>::value, void>::type
-		Start(std::vector<tstring>& argvector, const _next& next, const _remaining&... remaining)
+		Start(std::vector<tstring>&& argvector, const _next& next, const _remaining&... remaining)
 		{
 			argvector.push_back(to_tstring(next));
-			Start(argvector, remaining...);
+			Start(std::move(argvector), remaining...);
 		}
 
 		// Start (variadic)
 		//
 		// Recursive variadic function, processes an tstring type argument
 		template <typename... _remaining>
-		void Start(std::vector<tstring>& argvector, const tstring& next, const _remaining&... remaining)
+		void Start(std::vector<tstring>&& argvector, const tstring& next, const _remaining&... remaining)
 		{
 			argvector.push_back(next);
-			Start(argvector, remaining...);
+			Start(std::move(argvector), remaining...);
 		}
 	
 		// Start (variadic)
 		//
 		// Recursive variadic function, processes a generic text C-style string pointer
 		template <typename... _remaining>
-		void Start(std::vector<tstring>& argvector, const tchar_t* next, const _remaining&... remaining)
+		void Start(std::vector<tstring>&& argvector, const tchar_t* next, const _remaining&... remaining)
 		{
 			argvector.push_back(next);
-			Start(argvector, remaining...);
+			Start(std::move(argvector), remaining...);
 		}
 	
 		// Start
 		//
 		// Final overload in the variadic chain for Start()
-		void Start(std::vector<tstring>& argvector);
+		void Start(std::vector<tstring>&& argvector);
 
 		// m_context
 		//

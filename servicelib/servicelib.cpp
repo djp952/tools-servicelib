@@ -1,5 +1,5 @@
 //-----------------------------------------------------------------------------
-// Copyright (c) 2001-2014 Michael G. Brehm
+// Copyright (c) 2001-2016 Michael G. Brehm
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -1134,6 +1134,29 @@ BOOL service_harness::SetStatusFunc(SERVICE_STATUS_HANDLE handle, LPSERVICE_STAT
 };
 
 //-----------------------------------------------------------------------------
+// service_harness::Start
+//
+// Starts the service, specifying an argc/argv style set of command line arguments
+//
+// Arguments:
+//
+//	servicename		- Name of the service
+//	argc			- Number of command line arguments
+//	argv			- Array of command line argument strings
+
+void service_harness::Start(const resstring& servicename, int argc, tchar_t** argv)
+{
+	// Construct a vector<> for the arguments starting with the service name
+	std::vector<tstring> argvector { servicename };
+
+	// Skip argv[0], that becomes the service name which is handled automatically,
+	// this allows the caller to send in the process argc/argv if so inclined
+	for(int index = 1; index < argc; index++) argvector.emplace_back(argv[index]);
+
+	Start(std::move(argvector));
+}
+
+//-----------------------------------------------------------------------------
 // service_harness::Start (private)
 //
 // Starts the service
@@ -1142,7 +1165,7 @@ BOOL service_harness::SetStatusFunc(SERVICE_STATUS_HANDLE handle, LPSERVICE_STAT
 //
 //	argvector		- vector<> of command line argument strings
 
-void service_harness::Start(std::vector<tstring>& argvector)
+void service_harness::Start(std::vector<tstring>&& argvector)
 {
 	using namespace std::placeholders;
 
@@ -1158,9 +1181,9 @@ void service_harness::Start(std::vector<tstring>& argvector)
 	// Create the main service thread and launch it
 	m_mainthread = std::move(std::thread([=]() {
 
-		// Create a copy of the arguments vector local to this thread so it won't be destroyed
-		// prematurely, and convert it into an argv-style array of generic text string pointers
-		std::vector<tstring> arguments(argvector);
+		// Move the arguments vector into this thread and convert it into an argv-style 
+		// array of generic text string pointers to pass onto the ServiceMain() function
+		std::vector<tstring> arguments(std::move(argvector));
 		std::vector<tchar_t*> argv;
 		for(const auto& arg: arguments) argv.push_back(const_cast<tchar_t*>(arg.c_str()));
 		argv.push_back(nullptr);
