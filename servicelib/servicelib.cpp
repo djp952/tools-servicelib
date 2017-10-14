@@ -1,5 +1,5 @@
 //-----------------------------------------------------------------------------
-// Copyright (c) 2001-2016 Michael G. Brehm
+// Copyright (c) 2001-2017 Michael G. Brehm
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -54,80 +54,6 @@ ServiceProcessType GetServiceProcessType(const tchar_t* name)
 }
 
 //-----------------------------------------------------------------------------
-// svctl::parameter_base
-//-----------------------------------------------------------------------------
-
-//-----------------------------------------------------------------------------
-// parameter_base::Bind
-//
-// Binds the parameter to the parameter storage
-//
-// Arguments:
-//
-//	handle		- Parameter storage handle
-//	name		- Parameter value name to bind the parameter to
-//	loadfunc	- Function used to load the parameter value from storage
-
-void parameter_base::Bind(void* handle, const tchar_t* name, const load_parameter_func& loadfunc) 
-{
-	std::lock_guard<std::recursive_mutex> critsec(m_lock);
-
-	m_handle = handle;
-	m_loadfunc = loadfunc;
-	m_name = name;
-}
-
-//-----------------------------------------------------------------------------
-// parameter_base::IsBound (protected)
-//
-// Determines if the parameter has been bound to storage or not
-//
-// Arguments:
-//
-//	NONE
-
-bool parameter_base::IsBound(void)
-{
-	std::lock_guard<std::recursive_mutex> critsec(m_lock);
-	return ((m_handle != nullptr) && (m_loadfunc != nullptr));
-}
-
-//-----------------------------------------------------------------------------
-// parameter_base::TryLoad
-//
-// Loads the parameter value from storage, will eat any thrown exception
-//
-// Arguments:
-//
-//	NONE
-
-bool parameter_base::TryLoad(void)
-{
-	try { Load(); }
-	catch(...) { return false; }
-
-	return true;
-}
-
-//-----------------------------------------------------------------------------
-// parameter_base::Unbind
-//
-// Unbinds the parameter from the parameter storage
-//
-// Arguments:
-//
-//	NONE
-
-void parameter_base::Unbind(void)
-{
-	std::lock_guard<std::recursive_mutex> critsec(m_lock);
-
-	m_handle = nullptr;
-	m_loadfunc = nullptr;
-	m_name.clear();
-}
-
-//-----------------------------------------------------------------------------
 // svctl::resstring
 //-----------------------------------------------------------------------------
 
@@ -176,21 +102,6 @@ void service::Abort(std::exception_ptr exception)
 
 	m_stopsignal.Set();				// Interrupt the main service thread wait
 	Sleep(INFINITE);				// Never return
-}
-
-//-----------------------------------------------------------------------------
-// service::CloseParameterStore (private)
-//
-// Default implementation for closing parameter storage; uses the registry
-//
-// Arguments:
-//
-//	handle		- Handle returned from OpenParameterStore
-
-void service::CloseParameterStore(void* handle)
-{
-	// Close the registry key handle
-	if(handle) RegCloseKey(reinterpret_cast<HKEY>(handle));
 }
 
 //-----------------------------------------------------------------------------
@@ -258,10 +169,6 @@ DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eve
 	// Done with messing about with the current service status; release the critsec
 	critsec.unlock();
 
-	// PARAMCHANGE is automatically accepted if there are any parameters in the service,
-	// but may also have a service-defined handler so don't return after processing
-	if(control == ServiceControl::ParameterChange) ReloadParameters();
-
 	// Iterate over all of the implemented control handlers and invoke each of them
 	// in the order in which they appear in the control handler vector<>
 	bool handled = false;
@@ -284,20 +191,6 @@ DWORD service::ControlHandler(ServiceControl control, DWORD eventtype, void* eve
 	// Default for most service controls is to return ERROR_SUCCESS if it was handled
 	// and ERROR_CALL_NOT_IMPLEMENTED if no handler was present for the control
 	return (handled) ? ERROR_SUCCESS : ERROR_CALL_NOT_IMPLEMENTED;
-}
-
-//-----------------------------------------------------------------------------
-// service::IterateParameters (protected)
-//
-// Iterates over all parameters defined for the service and executes a function
-//
-// Arguments:
-//
-//	func		- Function to pass each parameter name and reference to
-
-void service::IterateParameters(std::function<void(const tstring& name, parameter_base& param)> func)
-{
-	// Default implementation has no parameters to iterate
 }
 
 //-----------------------------------------------------------------------------
@@ -333,11 +226,7 @@ DWORD service::getAcceptedControls(void)
 		else if(iterator->Control == ServiceControl::PreShutdown)			accept |= SERVICE_ACCEPT_PRESHUTDOWN;
 		else if(iterator->Control == ServiceControl::TimeChange)			accept |= SERVICE_ACCEPT_TIMECHANGE;
 		else if(iterator->Control == ServiceControl::TriggerEvent)			accept |= SERVICE_ACCEPT_TRIGGEREVENT;
-		else if(iterator->Control == ServiceControl::UserModeReboot)		accept |= SERVICE_ACCEPT_USERMODEREBOOT;
 	}
-
-	// If there are any svctl parameters in the service class, auto-accept PARAMCHANGE
-	IterateParameters([&](const tstring&, parameter_base&) { accept |= SERVICE_ACCEPT_PARAMCHANGE; });
 
 	return accept;						// Return the generated bitmask
 }
@@ -353,49 +242,6 @@ const control_handler_table& service::getHandlers(void) const
 	// can be started but otherwise will not respond to any controls, including STOP
 	static control_handler_table nohandlers;
 	return nohandlers;
-}
-
-
-//-----------------------------------------------------------------------------
-// service::LoadParameter (private)
-//
-// Default implementation for loading a value from parameter storage
-//
-// Arguments:
-//
-//	handle		- Handle returned from OpenParameterStore
-//	name		- Parameter value name
-//	format		- Expected parameter value format
-//	buffer		- Buffer to receive the parameter value
-//	length		- Length of the buffer
-
-size_t service::LoadParameter(void* handle, const tchar_t* name, ServiceParameterFormat format, void* buffer, size_t length)
-{
-	DWORD cb = static_cast<DWORD>(length);
-
-	// Pass all arguments onto RegGetValue(), no special processing is necessary
-	LSTATUS result = RegGetValue(reinterpret_cast<HKEY>(handle), nullptr, name, static_cast<DWORD>(format), nullptr, buffer, &cb);
-	if(result != ERROR_SUCCESS) throw winexception(result);
-
-	return static_cast<size_t>(cb);			// Return required/used buffer size
-}
-
-//-----------------------------------------------------------------------------
-// service::OpenParameterStore (private)
-//
-// Default implementation for opening parameter storage; uses the registry
-//
-// Arguments:
-//
-//	servicename		- Name assigned to the service instance
-
-void* service::OpenParameterStore(const tchar_t* servicename)
-{
-	HKEY hkey = nullptr;
-
-	// The default implementation for service parameters reads them from the service's Parameters key in HKLM
-	return (RegCreateKeyEx(HKEY_LOCAL_MACHINE, (tstring(_T("System\\CurrentControlSet\\Services\\")) + servicename + _T("\\Parameters")).c_str(), 
-		0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &hkey, nullptr) == ERROR_SUCCESS) ? hkey : nullptr;
 }
 
 //-----------------------------------------------------------------------------
@@ -431,21 +277,6 @@ DWORD service::Pause(void)
 }
 
 //-----------------------------------------------------------------------------
-// service::ReloadParameters
-//
-// Reloads the values for all bound parameter member variables
-//
-// Arguments:
-//
-//	NONE
-
-void service::ReloadParameters(void)
-{
-	// This can be done asynchronously; just iterate each parameter and reload it's value from storage
-	std::async(std::launch::async, [=]() { IterateParameters([=](const tstring&, parameter_base& param) { param.TryLoad(); }); });
-}
-
-//-----------------------------------------------------------------------------
 // service::Main
 //
 // Service instance entry point
@@ -460,12 +291,10 @@ void service::Main(int argc, tchar_t** argv, const service_context& context)
 {
 	using namespace std::placeholders;
 
-	void* paramhandle = nullptr;					// Service parameters handle
-
-	_ASSERTE(context.RegisterHandlerFunc);
+	assert(context.RegisterHandlerFunc);
 	if(!context.RegisterHandlerFunc) throw winexception(ERROR_INVALID_PARAMETER);
 
-	_ASSERTE(context.SetStatusFunc);
+	assert(context.SetStatusFunc);
 	if(!context.SetStatusFunc) throw winexception(ERROR_INVALID_PARAMETER);
 
 	// Define a static HandlerEx callback that calls back into this service instance
@@ -479,7 +308,7 @@ void service::Main(int argc, tchar_t** argv, const service_context& context)
 	// Define a status reporting function that uses the handle and process type defined above
 	m_statusfunc = [=](SERVICE_STATUS& status) -> void {
 
-		_ASSERTE(statushandle != 0);
+		assert(statushandle != 0);
 		status.dwServiceType = static_cast<DWORD>(context.ProcessType);
 		if(!context.SetStatusFunc(statushandle, &status)) throw winexception();
 	};
@@ -488,11 +317,6 @@ void service::Main(int argc, tchar_t** argv, const service_context& context)
 
 		// Service is starting; report SERVICE_START_PENDING
 		SetStatus(ServiceStatus::StartPending);
-
-		// Open the parameter storage for this instance and bind/load all service parameters
-		paramhandle = (context.OpenParameterStore) ? context.OpenParameterStore(argv[0]) : OpenParameterStore(argv[0]);
-		load_parameter_func paramloader = (context.LoadParameter) ? context.LoadParameter : std::bind(&service::LoadParameter, this, _1, _2, _3, _4, _5);
-		IterateParameters([=](const tstring& name, parameter_base& param) { param.Bind(paramhandle, name.c_str(), paramloader); param.TryLoad(); });
 
 		// Invoke derived service class startup code
 		OnStart(argc, argv);
@@ -506,11 +330,6 @@ void service::Main(int argc, tchar_t** argv, const service_context& context)
 	// If the exception thrown is unknown use a generic ERROR_UNHANDLED_EXCEPTION as the stop code
 	catch(winexception& ex) { TrySetStatus(ServiceStatus::Stopped, (ex.code() != ERROR_SUCCESS) ? ex.code() : ERROR_SERVICE_SPECIFIC_ERROR); }
 	catch(...) { TrySetStatus(ServiceStatus::Stopped, ERROR_UNHANDLED_EXCEPTION); }
-
-	// Unbind all of the service parameters and close the parameter storage
-	IterateParameters([](const tstring&, parameter_base& param) { param.Unbind(); });
-	if(context.CloseParameterStore) context.CloseParameterStore(paramhandle);
-	else CloseParameterStore(paramhandle);
 }
 
 //-----------------------------------------------------------------------------
@@ -528,8 +347,8 @@ void service::SetNonPendingStatus(ServiceStatus status, uint32_t win32exitcode, 
 {
 	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
-	_ASSERTE(m_statusfunc);							// Needs to be set
-	_ASSERTE(!m_statusworker.joinable());			// Should not be running
+	assert(m_statusfunc);							// Needs to be set
+	assert(!m_statusworker.joinable());			// Should not be running
 
 	// Create and initialize a new SERVICE_STATUS for this operation
 	SERVICE_STATUS newstatus;
@@ -557,8 +376,8 @@ void service::SetPendingStatus(ServiceStatus status)
 {
 	std::lock_guard<std::recursive_mutex> critsec(m_statuslock);
 
-	_ASSERTE(m_statusfunc);							// Needs to be set
-	_ASSERTE(!m_statusworker.joinable());			// Should not be running
+	assert(m_statusfunc);							// Needs to be set
+	assert(!m_statusworker.joinable());				// Should not be running
 
 	// Block all controls during SERVICE_START_PENDING and SERVICE_STOP_PENDING, otherwise only block
 	// controls that would result in a service status change while a status change is pending
@@ -744,49 +563,6 @@ service_harness::~service_harness()
 }
 
 //-----------------------------------------------------------------------------
-// service_harness::AppendToMultiStringBuffer (private)
-//
-// Appends a single string to an existing REG_MULTI_SZ buffer or terminates the
-// buffer by appending a final NULL if nullptr has been specified for string
-//
-// Arguments:
-//
-//	buffer		- Parameter byte data buffer
-//	string		- String to append to the buffer, or nullptr to terminate
-
-std::vector<uint8_t>& service_harness::AppendToMultiStringBuffer(std::vector<uint8_t>& buffer, const tchar_t* string)
-{
-	// Calculate the length of the data to be appended to the buffer and get current position
-	size_t length = (string) ? ((_tcslen(string) + 1) * sizeof(tchar_t)) : sizeof(tchar_t);
-	size_t pos = buffer.size();
-
-	// Allocate sufficient space in the buffer to hold the new data
-	buffer.resize(buffer.size() + length);
-
-	// If a string was provided, copy that and the NUL terminator into the buffer.  Otherwise,
-	// append a single NULL by zeroing out the additional space reserved above
-	if(string) memcpy_s(buffer.data() + pos, buffer.size() - pos, string, length);
-	else memset(buffer.data() + pos, 0, length);
-
-	return buffer;
-}
-
-//-----------------------------------------------------------------------------
-// service_harness::CloseParameterStoreFunc (private)
-//
-// Function invoked by the service to close parameter storage
-//
-// Arguments:
-//
-//	handle		- Handle provided by OpenParameterStore
-
-void service_harness::CloseParameterStoreFunc(void* handle)
-{
-	UNREFERENCED_PARAMETER(handle);
-	_ASSERTE(handle == reinterpret_cast<void*>(this));
-}
-
-//-----------------------------------------------------------------------------
 // service_harness::Continue
 //
 // Sends SERVICE_CONTROL_CONTINUE to the service, throws an exception if the
@@ -857,64 +633,6 @@ bool service_harness::getCanStop(void)
 }
 
 //-----------------------------------------------------------------------------
-// service_harness::LoadParameterFunc (private)
-//
-// Function invoked by the service to load a parameter value
-//
-// Arguments:
-//
-//	handle		- Handle provided by OpenParameterStore
-//	name		- Name of the parameter to load
-//	format		- Expected parameter data format
-//	buffer		- Destination buffer for the parameter data
-//	length		- Length of the parameter destination buffer
-
-size_t service_harness::LoadParameterFunc(void* handle, const tchar_t* name, ServiceParameterFormat format, void* buffer, size_t length)
-{
-	// The handle provided by OpenParameterStore is fake; it's just the (this) pointer
-	_ASSERTE(handle == reinterpret_cast<void*>(this));
-	if(handle != reinterpret_cast<void*>(this)) throw winexception(ERROR_INVALID_PARAMETER);
-
-	std::lock_guard<std::recursive_mutex> critsec(m_paramlock);
-
-	// If a buffer has been provided, initialize it to all zeros
-	if(buffer) memset(buffer, 0, length);
-
-	// Locate the parameter in the collection --> ERROR_FILE_NOT_FOUND if it doesn't exist
-	auto iterator = m_parameters.find(tstring(name));
-	if(iterator == m_parameters.end()) throw winexception(ERROR_FILE_NOT_FOUND);
-
-	// Check the data type against the stored value --> ERROR_UNSUPPORTED_TYPE if doesn't match
-	if(iterator->second.first != format) throw winexception(ERROR_UNSUPPORTED_TYPE);
-
-	if(buffer) {
-			
-		// check the buffer length and copy the data --> ERROR_MORE_DATA if insufficient
-		if(length < iterator->second.second.size()) throw winexception(ERROR_MORE_DATA);
-		else memcpy_s(buffer, length, iterator->second.second.data(), iterator->second.second.size());
-	}
-
-	return iterator->second.second.size();			// Return the size of the parameter value in bytes
-}
-
-//-----------------------------------------------------------------------------
-// service_harness::OpenParameterStoreFunc (private)
-//
-// Function invoked by the contained service to open parameter storage (no-op)
-//
-// Arguments:
-//
-//	servicename		- Name of the service instance
-
-void* service_harness::OpenParameterStoreFunc(const tchar_t* servicename)
-{
-	UNREFERENCED_PARAMETER(servicename);
-
-	// A handle isn't necessary for the local parameter store, use (this)
-	return reinterpret_cast<void*>(this); 
-}
-
-//-----------------------------------------------------------------------------
 // service_harness::Pause
 //
 // Sends SERVICE_CONTROL_PAUSE to the service, throws an exception if the
@@ -945,7 +663,7 @@ void service_harness::Pause(void)
 
 SERVICE_STATUS_HANDLE service_harness::RegisterHandlerFunc(LPCTSTR servicename, LPHANDLER_FUNCTION_EX handler, LPVOID context)
 {
-	_ASSERTE(handler != nullptr);
+	assert(handler != nullptr);
 	UNREFERENCED_PARAMETER(servicename);
 
 	m_handler = handler;					// Store the handler function pointer
@@ -1025,88 +743,10 @@ bool service_harness::ServiceControlAccepted(ServiceControl control, DWORD mask)
 		case ServiceControl::PreShutdown:			return ((mask & SERVICE_ACCEPT_PRESHUTDOWN) == SERVICE_ACCEPT_PRESHUTDOWN);
 		case ServiceControl::TimeChange:			return ((mask & SERVICE_ACCEPT_TIMECHANGE) == SERVICE_ACCEPT_TIMECHANGE);
 		case ServiceControl::TriggerEvent:			return ((mask & SERVICE_ACCEPT_TRIGGEREVENT) == SERVICE_ACCEPT_TRIGGEREVENT);
-		case ServiceControl::UserModeReboot:		return ((mask & SERVICE_ACCEPT_USERMODEREBOOT) == SERVICE_ACCEPT_USERMODEREBOOT);
 
 		// Allow any user-defined controls (128-255) to be passed to the service regardless of accept mask		
 		default: return ((static_cast<int>(control) >= 128) && (static_cast<int>(control) <= 255));
 	}
-}
-
-//-----------------------------------------------------------------------------
-// service_harness::SetParameter
-//
-// Sets a string-based parameter key/value pair
-//
-// Arguments:
-//
-//	name		- Name of the parameter to set
-//	value		- Value to assign to the parameter
-
-void service_harness::SetParameter(const resstring& name, const tchar_t* value)
-{
-	// If a non-null string pointer was provided, set it, otherwise set a blank string instead
-	if(value) SetParameter(name, ServiceParameterFormat::String, value, (_tcslen(value) + 1) * sizeof(tchar_t));
-	else SetParameter(name, ServiceParameterFormat::String, _T("\0"), sizeof(tchar_t));
-}
-
-//-----------------------------------------------------------------------------
-// service_harness::SetParameter
-//
-// Sets a string-based parameter key/value pair
-//
-// Arguments:
-//
-//	name		- Name of the parameter to set
-//	value		- Value to assign to the parameter
-
-void service_harness::SetParameter(const resstring& name, const tstring& value)
-{
-	// Set the parameter using the const tchar_t pointer for the string, include the null terminator
-	SetParameter(name, ServiceParameterFormat::String, value.c_str(), (value.length() + 1) * sizeof(tchar_t));
-}
-
-//-----------------------------------------------------------------------------
-// service_harness::SetParameter (private)
-//
-// Internal implementation of SetParameter, accepts the type and raw data
-//
-// Arguments:
-//
-//	name		- Parameter name
-//	format		- Parameter format
-//	value		- Pointer to the parameter data
-//	length		- Length, in bytes, of the parameter data
-
-void service_harness::SetParameter(const tstring& name, ServiceParameterFormat format, const void* value, size_t length)
-{
-	_ASSERTE(value);
-	_ASSERTE(length > 0);
-
-	// Use pointers to the data as the iterators for constructing the vector<>
-	const uint8_t* begin = reinterpret_cast<const uint8_t*>(value);
-	const uint8_t* end = begin + length;
-
-	// Insert or replace the parameter value in the collection
-	SetParameter(name, format, std::vector<uint8_t>(begin, end));
-}
-
-//-----------------------------------------------------------------------------
-// service_harness::SetParameter (private)
-//
-// Internal implementation of SetParameter, accepts the type and raw data
-//
-// Arguments:
-//
-//	name		- Parameter name
-//	format		- Parameter format
-//	value		- Parameter data as a vector<> rvalue reference
-
-void service_harness::SetParameter(const tstring& name, ServiceParameterFormat format, std::vector<uint8_t>&& value)
-{
-	if(name.length() == 0) throw winexception(ERROR_INVALID_PARAMETER);
-
-	std::lock_guard<std::recursive_mutex> critsec(m_paramlock);
-	m_parameters[name] = parameter_value(format, std::move(value));
 }
 
 //-----------------------------------------------------------------------------
@@ -1124,7 +764,7 @@ BOOL service_harness::SetStatusFunc(SERVICE_STATUS_HANDLE handle, LPSERVICE_STAT
 	std::unique_lock<std::mutex> critsec(m_statuslock);
 
 	// Ensure that the handle provided is actually the address of this harness instance
-	_ASSERTE(reinterpret_cast<service_harness*>(handle) == this);
+	assert(reinterpret_cast<service_harness*>(handle) == this);
 	if(reinterpret_cast<service_harness*>(handle) != this) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
 
 	m_status = *status;						// Copy the new SERVICE_STATUS
@@ -1192,10 +832,7 @@ void service_harness::Start(std::vector<tstring>&& argvector)
 		service_context context = { 
 			ServiceProcessType::Unique,
 			std::bind(&service_harness::RegisterHandlerFunc, this, _1, _2, _3),
-			std::bind(&service_harness::SetStatusFunc, this, _1, _2),
-			std::bind(&service_harness::OpenParameterStoreFunc, this, _1),
-			std::bind(&service_harness::LoadParameterFunc, this, _1, _2, _3, _4, _5),
-			std::bind(&service_harness::CloseParameterStoreFunc, this, _1) 
+			std::bind(&service_harness::SetStatusFunc, this, _1, _2) 
 		};
 
 		// Launch the service with the specified command line arguments and instance context
@@ -1267,6 +904,28 @@ bool service_harness::WaitForStatus(ServiceStatus status, uint32_t timeout)
 //
 // Arguments:
 //
+//	NONE
+
+winexception::winexception() : winexception(GetLastError())
+{
+}
+
+//-----------------------------------------------------------------------------
+// winexception Constructor
+//
+// Arguments:
+//
+//	hresult		- HRESULT status code
+
+winexception::winexception(HRESULT hresult) : winexception(static_cast<DWORD>(hresult))
+{
+}
+
+//-----------------------------------------------------------------------------
+// winexception Constructor
+//
+// Arguments:
+//
 //	result		- Win32 error code
 
 winexception::winexception(DWORD result) : m_code(result)
@@ -1283,6 +942,34 @@ winexception::winexception(DWORD result) : m_code(result)
 	}
 
 	else m_what = "Unknown Windows status code " + std::to_string(result);
+}
+
+//-----------------------------------------------------------------------------
+// winexception::code
+//
+// Exposes the Win32 error code used to construct the exception
+//
+// Arguments:
+//
+//	NONE
+
+DWORD winexception::code() const 
+{ 
+	return m_code; 
+}
+
+//-----------------------------------------------------------------------------
+// winexception::what
+//
+// Exposes a string-based representation of the exception (ANSI only)
+//
+// Arguments:
+//
+//	NONE
+
+const char_t* winexception::what() const 
+{ 
+	return m_what.c_str(); 
 }
 
 };	// namespace svctl

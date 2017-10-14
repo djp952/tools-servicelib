@@ -17,9 +17,9 @@ public:
 		UNREFERENCED_PARAMETER(argc);
 		UNREFERENCED_PARAMETER(argv);
 
-		std::vector<std::wstring> multisz = m_multitest;
-		auto multisz_auto = m_multitest.Value;
-		auto dword_auto = m_dwtest.Value;
+		//std::vector<std::wstring> multisz = m_multitest;
+		//auto multisz_auto = m_multitest.Value;
+		//auto dword_auto = m_dwtest.Value;
 
 		// Self-stop; could be useful model for trigger services
 		std::async(std::launch::async, [=]() { 
@@ -67,19 +67,19 @@ public:
 		//CONTROL_HANDLER_ENTRY(ServiceControl::ParameterChange, OnParamChange)
 	END_CONTROL_HANDLER_MAP()
 
-	BEGIN_PARAMETER_MAP(MyService)
-		PARAMETER_ENTRY(_T("TestSz"), m_paramtestsz)
-		PARAMETER_ENTRY(_T("MyStringRegSz"), m_multitest);
-	END_PARAMETER_MAP()
+	//BEGIN_PARAMETER_MAP(MyService)
+	//	PARAMETER_ENTRY(_T("TestSz"), m_paramtestsz)
+	//	PARAMETER_ENTRY(_T("MyStringRegSz"), m_multitest);
+	//END_PARAMETER_MAP()
 
 private:
 
 	MyService(const MyService&)=delete;
 	MyService& operator=(const MyService&)=delete;
 
-	StringParameter m_paramtestsz { _T("defaultparam") };
-	MultiStringParameter m_multitest;
-	DWordParameter m_dwtest { 456 };
+	//StringParameter m_paramtestsz { _T("defaultparam") };
+	//MultiStringParameter m_multitest;
+	//DWordParameter m_dwtest { 456 };
 };
 
 int APIENTRY _tWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPTSTR lpCmdLine, _In_ int nCmdShow)

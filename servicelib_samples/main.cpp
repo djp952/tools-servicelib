@@ -24,8 +24,10 @@
 #include "resource.h"
 
 // Sample services
+#include "servicelib.h"
 #include "MinimalService.h"
-#include "ParameterService.h"
+
+#include <crtdbg.h>
 
 #pragma warning(push, 4)
 
@@ -59,12 +61,13 @@ int APIENTRY _tWinMain(HINSTANCE instance, HINSTANCE previnstance, LPTSTR comman
 
 #endif	// _DEBUG
 
+
+
 	// Running as a service -- create and dispatch a ServiceTable that references all
 	// of the services that will be available as part of this application process
 	ServiceTable services = { 
 		
 		ServiceTableEntry<MinimalService>(IDS_MINIMALSERVICE_NAME), 
-		ServiceTableEntry<ParameterService>(IDS_PARAMETERSERVICE_NAME) 
 	};
 
 	services.Dispatch();
